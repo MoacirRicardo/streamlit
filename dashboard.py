@@ -216,4 +216,4 @@ st.plotly_chart(mapa, use_container_width=True)
 # FIM
 # ==================================================
 st.markdown("---")
-st.markdown("*Dashboard Profissional de Assinaturas e Análises Avançadas.*")
+
