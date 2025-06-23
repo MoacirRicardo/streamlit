@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import plotly.express as px
 
 # ==================================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO DE PÁGINA
 # ==================================================
 st.set_page_config(page_title="Dashboard de Assinaturas", layout="wide")
 
@@ -17,21 +17,42 @@ COR_SUCESSO = "#10B981"
 COR_CHURN = "#EF4444"
 
 # ==================================================
-# CARREGA OS DADOS
+# CARREGAR OS DADOS
 # ==================================================
 with open("dados_formatados.json", "r", encoding="utf-8") as f:
     dados = json.load(f)
 
 df = pd.DataFrame(dados)
 
+# Converter colunas para datetime
 datas = ["created_at", "inicio_ciclo", "fim_ciclo", "proximo_ciclo"]
 for d in datas:
-    df[d] = pd.to_datetime(df[d], errors="coerce")
+    df[d] = pd.to_datetime(df[d], errors="coerce")  # Converter ou transformar em NaT quando não possível
+
+# Converter coordenadas para latitude e longitude
+# Garante que 'coordenadas' não nulas e no formato esperado
+mask = df["coordenadas"].str.contains(",", na=False)
+df_validas = df[mask].copy()
+df_validas[["latitude", "longitude"]] = df_validas["coordenadas"].str.split(",", expand=True).astype(float)
+
+# Adiciona as colunas latitude e longitude ao DF original
+df["latitude"] = None
+df["longitude"] = None
+df.loc[df_validas.index, "latitude"] = df_validas["latitude"]
+df.loc[df_validas.index, "longitude"] = df_validas["longitude"]
+
+# Converte para float para todas as linhas restantes
+df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+
+
+# Excluir registros com created_at nulos
+df = df.dropna(subset=["created_at"])
 
 hoje = datetime.today().date()
 
 # ==================================================
-# SIDEBAR
+# SIDEBAR DE FILTRO DE PERÍODO
 # ==================================================
 st.sidebar.header("Filtros de Período")
 inicio = st.sidebar.date_input("Início:", df["created_at"].min().date())
@@ -51,7 +72,7 @@ churn_dia = df[(df["status_assinatura"].str.contains("cancel")) & (df["created_a
 churn_mes = df[(df["status_assinatura"].str.contains("cancel")) & (df["created_at"].dt.month == hoje.month)].shape[0]
 churn_ano = df[(df["status_assinatura"].str.contains("cancel")) & (df["created_at"].dt.year == hoje.year)].shape[0]
 
-st.markdown(f"## Dashboard de Assinaturas")
+st.markdown("## Dashboard de Assinaturas e Renovações")
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric("Assinaturas Vigentes", vigentes)
 k2.metric("Entradas (Dia)", entradas_dia)
@@ -63,7 +84,7 @@ k6.metric("Churn (Ano)", churn_ano)
 # ==================================================
 # EMPRESAS PARA DERRUBAR HOJE (+7 DIAS)
 # ==================================================
-st.markdown("### Empresas para derrubar hoje (+7 dias para expirar): ")
+st.markdown("### Empresas para Derrubar Hoje (+7 Dias para Expirar): ")
 d7 = datetime.today() + timedelta(days=7)
 empresas_derrubar = df[(df["fim_ciclo"].dt.date <= d7.date()) & (df["status_assinatura"] == "active")]
 st.dataframe(empresas_derrubar[["nome_cliente", "nome_produto", "fim_ciclo", "metodo_pagamento", "status_assinatura"]])
@@ -72,16 +93,14 @@ st.dataframe(empresas_derrubar[["nome_cliente", "nome_produto", "fim_ciclo", "me
 # RENDA RETIDA e PERCENTUAL DE RENOVAÇÃO
 # ==================================================
 st.markdown("### Renda Retida e Percentual de Renovação")
-renovacoes_hoje = df[(df["inicio_ciclo"].dt.date == hoje) & (df["status_assinatura"].str.contains("active"))]
 renovacoes_mes = df[(df["inicio_ciclo"].dt.month == hoje.month) & (df["status_assinatura"].str.contains("active"))]
-
 st.metric("Renda Retida (Mês)", f"R$ {renovacoes_mes['total'].sum():,.2f}")
 
 percentual_renovacao = (renovacoes_mes.shape[0] / df.shape[0]) * 100 if df.shape[0] > 0 else 0
 st.metric("Percentual de Renovação (%)", f"{percentual_renovacao:.2f}")
 
 # ==================================================
-# RENOVAÇÕES E CANCELAMENTOS NO DIA E NO MÊS
+# RENOVAÇÕES E CANCELAMENTOS DIÁRIOS/MENSAIS
 # ==================================================
 st.markdown("### Renovações e Cancelamentos por Dia e por Mês")
 renovadas_dia = df[(df["status_assinatura"].str.contains("active")) & (df["inicio_ciclo"].dt.date == hoje)].shape[0]
@@ -126,7 +145,7 @@ st.plotly_chart(px.bar(cidade_count, title="Assinaturas por Cidade",
                       color_discrete_sequence=["#3B82F6"]))
 
 # ==================================================
-# OFERTAS E ASSINATURAS FALSAS
+# OFERTAS E FALSAS ASSINATURAS
 # ==================================================
 st.markdown("### Ofertas e Falsas Assinaturas")
 ofertas_count = df["nome_oferta"].value_counts()
@@ -148,6 +167,7 @@ st.dataframe(df[["email", "nome_cliente", "created_at", "codigo_assinatura", "ci
 # ==================================================
 st.markdown("### Receita de Entrada por Mês")
 faturamento_mensal = df.groupby(df["created_at"].dt.to_period("M"))["total"].sum()
+faturamento_mensal = faturamento_mensal.dropna()
 st.line_chart(faturamento_mensal)
 
 # ==================================================
@@ -174,6 +194,23 @@ pendentes_mes_count = df[(df["inicio_ciclo"].dt.month == hoje.month) & (~df["sta
 st.plotly_chart(px.pie(values=[renovacoes_mes_count, pendentes_mes_count], names=["Feitas", "Pendentes"],
                       title="Renovação - Mês",
                       color_discrete_sequence=["#10B981", "#EF4444"]))
+
+# ==================================================
+# MAPA DE ASSINATURAS
+# ==================================================
+st.markdown("### 📍 Mapa das Assinaturas por Localização")
+mapa = px.scatter_mapbox(df,
+    lat="latitude",
+    lon="longitude",
+    hover_name="nome_cliente",
+    hover_data=["estado", "cidade", "status_assinatura", "total", "nome_produto"],
+    color="status_assinatura",
+    zoom=4,
+    height=600,
+    mapbox_style="carto-positron"
+)
+
+st.plotly_chart(mapa, use_container_width=True)
 
 # ==================================================
 # FIM
